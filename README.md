@@ -18,7 +18,7 @@ This repository groups my **projects on crude oil and refined products markets**
 
 The core idea is to:
 
-> **Turn energy market analyses into reproducible Python tools: tested, documented and runnable by anyone on public data.**
+ **Turn energy market analyses into reproducible Python tools: tested, documented and runnable by anyone on public data.**
 
 | Project | Description | Main Tools |
 |---|---|---|
