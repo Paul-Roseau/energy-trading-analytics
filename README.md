@@ -95,22 +95,6 @@ Each script writes its charts to `figures/` and its tables to `results.md`.
 
 ---
 
-## Background
-
-* Analyses originally developed during my MSc in Energy Management at ESCP Business School (London, 2025-2026)
-* This repository is a rewrite, published in November 2026, on public EIA data
-* Original coursework co-written with Satyam Patil, Llyse Igondjo Vandji and Roman Tschare
-* The original work used Bloomberg data, which is not redistributed here
-
----
-
-## Disclaimer
-
-This repository is for **research and educational purposes only**.
-It is **not investment advice** and is not intended for live trading.
-
----
-
 ## Author
 
 **Paul Roseau** | MSc Energy Management, ESCP Business School
