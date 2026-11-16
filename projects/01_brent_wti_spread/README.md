@@ -148,3 +148,10 @@ Outputs:
 
 * `figures/`: charts
 * [`results.md`](results.md): all tables at full precision
+
+Tests (OU calibration on simulated data, entry and exit rules of the z-score strategy, alignment of the two price series):
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest projects/01_brent_wti_spread
+```
