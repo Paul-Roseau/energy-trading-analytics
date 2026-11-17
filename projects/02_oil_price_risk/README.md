@@ -1,21 +1,22 @@
 # Oil Price Risk Models
 
-**Monte Carlo price forecasts on Brent crude, with one-day Value-at-Risk backtesting to follow**
+**Monte Carlo price forecasts and one-day Value-at-Risk backtesting on Brent crude**
 
 ## Overview
 
-This project compares **stochastic price models** on Brent crude, using EIA daily spot prices from **2021 to 2025**.
+This project compares **stochastic price models** and **VaR methodologies** on Brent crude, using EIA daily spot prices from **2021 to 2025**.
 
 The core idea is to:
 
-> **Calibrate simple price models on 2021-2023 and test their forecasts on 2024-2025.**
+> **Calibrate simple price models on 2021-2023, test their forecasts on 2024-2025, and check which one-day VaR model passes standard backtests.**
 
 The project provides:
 
 * Descriptive statistics and unit-root tests on prices and returns
 * GBM and Ornstein-Uhlenbeck calibration, Monte Carlo simulation (5,000 paths)
 * Out-of-sample forecast evaluation (RMSE, band coverage)
-* VaR models and backtests: in progress
+* Three VaR models: EWMA (RiskMetrics), Historical Simulation, Filtered Historical Simulation
+* Backtesting with Kupiec (coverage) and Christoffersen (independence) tests
 
 ![Brent price and returns](figures/prices_and_returns.png)
 
@@ -42,6 +43,17 @@ The project provides:
 * `dX = κ(θ − X)dt + σdW`, with `X = ln(S)`
 * Exact AR(1) calibration
 * Kendall small-sample bias correction on κ
+
+### 3. VaR Models
+
+* **EWMA (RiskMetrics)**: `σ²(t) = λσ²(t−1) + (1 − λ)r²(t−1)`, λ = 0.90, 0.94, 0.97, normal quantile
+* **Historical Simulation**: empirical quantile of the last 250 returns
+* **Filtered Historical Simulation**: EWMA-standardised returns, empirical quantiles rescaled by today's volatility
+
+### 4. Backtests
+
+* **Kupiec (POF)**: is the number of breaches consistent with the confidence level?
+* **Christoffersen**: are breaches independent, or do they cluster?
 
 ---
 
@@ -85,11 +97,33 @@ The project provides:
 * Over two years its band is too narrow (59% of days inside vs 75% expected): prices settled below its long-run level in 2025
 * The GBM band contains every day only because it is very wide
 
+### VaR Backtest (982 days, February 2022 - December 2025)
+
+| Model | Conf. | Long: breaches | Kupiec p | Indep. p | Short: breaches | Kupiec p | Indep. p |
+|---|---|---|---|---|---|---|---|
+| EWMA normal, λ 0.94 | 95% | 6.42% | 0.051 | 0.623 | 3.97% | 0.126 | 0.718 |
+| Historical Simulation, 250 d | 95% | 5.09% | 0.895 | **0.048** | 5.09% | 0.895 | 0.372 |
+| Filtered HS, λ 0.94 | 95% | 5.70% | 0.323 | 0.319 | 5.19% | 0.782 | 0.660 |
+| EWMA normal, λ 0.94 | 99% | 1.73% | **0.037** | 0.295 | 1.12% | 0.710 | 0.108 |
+| EWMA normal, λ 0.97 | 99% | 1.83% | **0.019** | **0.041** | 1.02% | 0.954 | 0.086 |
+| Historical Simulation, 250 d | 99% | 1.22% | 0.499 | **0.007** | 1.53% | 0.123 | 0.223 |
+| Filtered HS, λ 0.94 | 99% | 1.12% | 0.710 | 0.108 | 1.53% | 0.123 | 0.223 |
+
+In bold: rejection at 5%. Full table with λ = 0.90, 0.94 and 0.97 in [`results.md`](results.md).
+
+![VaR backtest](figures/var_backtest.png)
+
+* **EWMA normal**: adequate at 95%, too thin-tailed at 99% for long positions (Kupiec rejects)
+* **Historical Simulation**: correct number of breaches, but breaches cluster (independence rejected at 99%)
+* **Filtered Historical Simulation**: passes both tests, long and short, at 95% and 99%
+
 ---
 
 ## Limitations & Considerations
 
-* Spot prices only
+* About 10 breaches expected at 99% over 982 days: both tests have low power
+* With a 250-day window, the interpolated 1% quantile is breached about 1.4% of the time even for i.i.d. returns
+* Spot prices, one-day horizon, no Expected Shortfall
 * Single-factor models cannot move their long-run level (a two-factor Schwartz-Smith model would)
 
 ---

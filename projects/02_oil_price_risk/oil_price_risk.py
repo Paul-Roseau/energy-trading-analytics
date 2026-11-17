@@ -6,6 +6,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from scipy import stats
+from scipy.stats import norm, chi2
+from scipy.special import xlogy
 from statsmodels.tsa.stattools import adfuller
 
 
@@ -25,11 +27,17 @@ NB_TRAJECTOIRES = 5000
 GRAINE = 2026
 BANDE = (0.125, 0.875)           # bande centrale à 75%
 
+LAMBDAS = [0.90, 0.94, 0.97]     # EWMA RiskMetrics
+CONFIANCES = [0.95, 0.99]
+FENETRE_HS = 250                 # simulation historique
+LAMBDA_FHS = 0.94                # simulation historique filtrée
+
 # Couleurs des graphiques
 FOND = "#fcfcfb"
 ENCRE = "#0b0b0b"
 ENCRE_2 = "#52514e"
 GRIS = "#898781"
+GRIS_CLAIR = "#b9b8b2"
 GRILLE = "#e1e0d9"
 AXE = "#c3c2b7"
 BLEU = "#2a78d6"
@@ -140,6 +148,79 @@ def evaluer_prevision(trajectoires, reel):
 
 
 # ============================================================================
+# VALUE AT RISK
+# ============================================================================
+# Chaque VaR est une prévision pour le jour t faite avec les rendements jusqu'à t-1.
+# Position longue : perte si r < -VaR_long. Position courte : perte si r > VaR_short.
+
+def vol_ewma(rendements, lam, fenetre_init=30):
+    """Volatilité EWMA (RiskMetrics) : s2[t] = lam s2[t-1] + (1 - lam) r[t-1]^2"""
+    r = rendements.to_numpy()
+    s2 = np.full(len(r), np.nan)
+    s2[fenetre_init] = np.var(r[:fenetre_init], ddof=1)   # initialisation
+    for t in range(fenetre_init + 1, len(r)):
+        s2[t] = lam * s2[t - 1] + (1 - lam) * r[t - 1] ** 2
+    return pd.Series(np.sqrt(s2), index=rendements.index)
+
+
+def var_ewma(rendements, lam, confiance):
+    """VaR normale EWMA (moyenne nulle), identique en long et en short"""
+    var = norm.ppf(confiance) * vol_ewma(rendements, lam)
+    return var, var
+
+
+def var_historique(rendements, confiance, fenetre=FENETRE_HS):
+    """Simulation historique sur les `fenetre` derniers rendements"""
+    passe = rendements.shift(1).rolling(fenetre)
+    return -passe.quantile(1 - confiance), passe.quantile(confiance)
+
+
+def var_historique_filtree(rendements, lam, confiance, fenetre=FENETRE_HS):
+    """Simulation historique filtrée : rendements standardisés par l'EWMA,
+    quantiles empiriques remis à l'échelle de la volatilité du jour"""
+    vol = vol_ewma(rendements, lam)
+    passe = (rendements / vol).shift(1).rolling(fenetre)
+    return -passe.quantile(1 - confiance) * vol, passe.quantile(confiance) * vol
+
+
+def test_kupiec(nb_obs, nb_depassements, p):
+    """Test de Kupiec (1995) : le nombre de dépassements est-il cohérent avec p ?"""
+    p_hat = nb_depassements / nb_obs
+    log_l0 = xlogy(nb_obs - nb_depassements, 1 - p) + xlogy(nb_depassements, p)
+    log_l1 = xlogy(nb_obs - nb_depassements, 1 - p_hat) + xlogy(nb_depassements, p_hat)
+    lr = -2 * (log_l0 - log_l1)
+    return chi2.sf(lr, 1)
+
+
+def test_christoffersen(depassements):
+    """Test de Christoffersen (1998) : les dépassements sont-ils indépendants ?"""
+    h = np.asarray(depassements, dtype=int)
+    avant, apres = h[:-1], h[1:]
+    n00 = np.sum((avant == 0) & (apres == 0))
+    n01 = np.sum((avant == 0) & (apres == 1))
+    n10 = np.sum((avant == 1) & (apres == 0))
+    n11 = np.sum((avant == 1) & (apres == 1))
+    pi0 = n01 / (n00 + n01) if n00 + n01 > 0 else 0.0
+    pi1 = n11 / (n10 + n11) if n10 + n11 > 0 else 0.0
+    pi = (n01 + n11) / (n00 + n01 + n10 + n11)
+    log_l0 = xlogy(n00 + n10, 1 - pi) + xlogy(n01 + n11, pi)
+    log_l1 = xlogy(n00, 1 - pi0) + xlogy(n01, pi0) + xlogy(n10, 1 - pi1) + xlogy(n11, pi1)
+    lr = -2 * (log_l0 - log_l1)
+    return chi2.sf(lr, 1)
+
+
+def backtest_var(rendements, var_long, var_short, confiance):
+    """Taux de dépassement et tests, pour une position longue et une position courte"""
+    p = 1 - confiance
+    res = {}
+    for cote, depassements in [("long", rendements < -var_long), ("short", rendements > var_short)]:
+        res[f"taux_{cote}"] = depassements.mean()
+        res[f"kupiec_{cote}"] = test_kupiec(len(rendements), depassements.sum(), p)
+        res[f"indep_{cote}"] = test_christoffersen(depassements.to_numpy())
+    return res
+
+
+# ============================================================================
 # GRAPHIQUES
 # ============================================================================
 
@@ -185,6 +266,28 @@ def graphique_monte_carlo(calibration, test, prev_gbm, prev_ou):
     source(axes[0], "Calibrated on 2021-2023, simulated from the last 2023 price; "
                     "grey line: end of the training window.")
     fig.savefig(os.path.join(FIG_DIR, "monte_carlo.png"), bbox_inches="tight", pad_inches=0.2)
+    plt.close(fig)
+
+
+def graphique_var(rendements, var_ewma_99, var_fhs_99):
+    fig, ax = plt.subplots(figsize=(10, 4.4))
+    ax.plot(rendements.index, rendements * 100, color=GRIS_CLAIR, lw=0.7)
+    for var, couleur, nom in ((var_ewma_99, BLEU, "EWMA normal 99%"),
+                              (var_fhs_99, ORANGE, "Filtered historical simulation 99%")):
+        var = var * 100
+        depassements = rendements * 100 < -var
+        ax.plot(var.index, -var, color=couleur, lw=1.4,
+                label=f"{nom}: {depassements.sum()} breaches ({depassements.mean():.1%}, expected 1.0%)")
+        ax.scatter(rendements.index[depassements], (rendements * 100)[depassements], s=22,
+                   color=couleur, edgecolor=FOND, linewidth=1.0, zorder=3)
+    ax.axhline(0, color=AXE, lw=0.8)
+    ax.set_title("One-day 99% VaR of a long Brent position versus realised returns, %")
+    ax.legend(loc="lower right")
+    ax.xaxis.set_major_locator(mdates.YearLocator(1))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax.margins(x=0.01)
+    source(ax, "Dots: days when the loss exceeded the VaR forecast made the day before.")
+    fig.savefig(os.path.join(FIG_DIR, "var_backtest.png"), bbox_inches="tight", pad_inches=0.2)
     plt.close(fig)
 
 
@@ -273,10 +376,36 @@ def main():
                     "RMSE of mean path", "Days inside 75% band"], lignes)
     print(f"RMSE 2024 : GBM {previsions[('2024', 'GBM')]['rmse']:.2f}, OU {previsions[('2024', 'OU')]['rmse']:.2f}")
 
-    # 4. Graphiques
+    # 4. Backtest des VaR, sur la même fenêtre pour tous les modèles
+    modeles = {}
+    for c in CONFIANCES:
+        for lam in LAMBDAS:
+            modeles[(f"EWMA normal, lambda {lam}", c)] = var_ewma(rendements, lam, c)
+        modeles[(f"Historical simulation, {FENETRE_HS} d", c)] = var_historique(rendements, c)
+        modeles[(f"Filtered HS, lambda {LAMBDA_FHS}", c)] = var_historique_filtree(rendements, LAMBDA_FHS, c)
+    valide = pd.concat([v[0] for v in modeles.values()], axis=1).notna().all(axis=1)
+    fenetre = rendements.index[valide]
+    r = rendements.loc[fenetre]
+
+    res += f"\n## One-day VaR backtest, {fenetre[0].date()} to {fenetre[-1].date()} " \
+           f"({len(fenetre):,} days, same window for every model)\n\n"
+    res += "Exceedance rates for a long and a short position; Kupiec tests coverage, " \
+           "Christoffersen tests independence (p < 0.05 rejects the model).\n\n"
+    lignes = []
+    for (nom, c), (var_l, var_s) in modeles.items():
+        bt = backtest_var(r, var_l.loc[fenetre], var_s.loc[fenetre], c)
+        lignes.append([nom, f"{c:.0%}", f"{bt['taux_long']:.2%}", f(bt["kupiec_long"], 3),
+                       f(bt["indep_long"], 3), f"{bt['taux_short']:.2%}", f(bt["kupiec_short"], 3),
+                       f(bt["indep_short"], 3)])
+    res += tableau(["Model", "Conf.", "Long: breaches", "Kupiec p", "Indep. p", "Short: breaches",
+                    "Kupiec p", "Indep. p"], lignes)
+
+    # 5. Graphiques
     graphique_prix(brent, rendements)
     graphique_monte_carlo(calibration, test, previsions[("2024-2025", "GBM")],
                           previsions[("2024-2025", "OU")])
+    graphique_var(r, modeles[("EWMA normal, lambda 0.94", 0.99)][0].loc[fenetre],
+                  modeles[(f"Filtered HS, lambda {LAMBDA_FHS}", 0.99)][0].loc[fenetre])
 
     with open(os.path.join(DOSSIER, "results.md"), "w", encoding="utf-8") as fichier:
         fichier.write(res)
