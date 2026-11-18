@@ -6,7 +6,7 @@
 
 # Energy Trading Analytics
 
-**Python toolkit for energy market analysis, starting with Brent-WTI spread trading**
+**Python toolkit for energy market analysis: Brent-WTI spread trading and oil price risk models**
 
 Built on public EIA data, no Bloomberg Terminal required.
 
@@ -23,8 +23,9 @@ The core idea is to:
 | Project | Description | Main Tools |
 |---|---|---|
 | [Brent-WTI Spread Trading](projects/01_brent_wti_spread) | Mean-reversion analysis of the Brent-WTI spread, z-score strategy backtest, options on the spread | ADF, Engle-Granger, Ornstein-Uhlenbeck, Bachelier, Kirk |
+| [Oil Price Risk Models](projects/02_oil_price_risk) | Monte Carlo price forecasts and one-day VaR backtesting on Brent | GBM, OU, EWMA, Historical & Filtered HS, Kupiec, Christoffersen |
 
-More projects to come (price risk models, storage economics).
+Next: a storage economics project.
 
 ![Brent-WTI spread](projects/01_brent_wti_spread/figures/prices_and_spread.png)
 
@@ -36,6 +37,8 @@ More projects to come (price risk models, storage economics).
 |---|---|
 | Brent-WTI Spread | Half-life down from **17 to 4 trading days** since WTI Midland joined Dated Brent (June 2023) |
 | Brent-WTI Spread | Z-score strategy: **Sharpe 0.66** at next-close execution vs 1.01 at same-close execution |
+| Oil Price Risk | OU beats GBM on forecast error (RMSE **8.3 vs 12.1** USD/bbl over 2024) |
+| Oil Price Risk | **Filtered Historical Simulation** is the only VaR model passing both backtests at 99% |
 
 ---
 
@@ -45,8 +48,12 @@ More projects to come (price risk models, storage economics).
 energy-trading-analytics/
 ├── data/                              # EIA daily spot prices (Brent, WTI)
 ├── projects/
-│   └── 01_brent_wti_spread/
-│       ├── brent_wti_spread.py        # Stats, OU calibration, z-score backtest, spread options
+│   ├── 01_brent_wti_spread/
+│   │   ├── brent_wti_spread.py        # Stats, OU calibration, z-score backtest, spread options
+│   │   ├── figures/
+│   │   └── results.md
+│   └── 02_oil_price_risk/
+│       ├── oil_price_risk.py          # GBM vs OU Monte Carlo, VaR models and backtests
 │       ├── figures/
 │       └── results.md
 ├── scripts/update_data.py             # Refresh the EIA data
@@ -70,6 +77,7 @@ pip install -r requirements.txt
 
 ```bash
 python projects/01_brent_wti_spread/brent_wti_spread.py
+python projects/02_oil_price_risk/oil_price_risk.py
 ```
 
 Each script writes its charts to `figures/` and its tables to `results.md`.
