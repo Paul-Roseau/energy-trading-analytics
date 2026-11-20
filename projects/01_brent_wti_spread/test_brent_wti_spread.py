@@ -1,9 +1,14 @@
-"""Tests de l'étude du spread Brent-WTI : calibration OU, signal z-score, backtest et données"""
+"""Tests de l'étude du spread Brent-WTI : calibration OU, signal z-score, backtest, options et données"""
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import norm
 
 import brent_wti_spread as bws
+
+T_MOIS = 21 / 252                                # un mois de bourse
+TAUX = 0.04
+GRILLE_SPREAD = np.linspace(0.0, 14.0, 2801)     # pas de 0,005 USD/bbl
 
 
 def simuler_ou(kappa, theta, sigma, nb_pas, graine):
@@ -140,6 +145,65 @@ def test_max_drawdown_is_measured_from_the_running_peak():
         pire = min(pire, valeur - sommet)
     assert pire < 0
     assert resume["max_drawdown_usd"] == pytest.approx(pire)
+
+
+# ============================================================================
+# OPTIONS SUR LE SPREAD
+# ============================================================================
+
+@pytest.mark.parametrize("F, K", [(4.2, 5.0), (6.0, 5.0), (-1.0, 0.5)])
+def test_bachelier_put_call_parity(F, K):
+    call = bws.prix_bachelier(F, K, T_MOIS, 6.0, TAUX, "call")
+    put = bws.prix_bachelier(F, K, T_MOIS, 6.0, TAUX, "put")
+    assert call - put == pytest.approx(np.exp(-TAUX * T_MOIS) * (F - K))
+
+
+def test_bachelier_at_the_money_closed_form():
+    prix = bws.prix_bachelier(5.0, 5.0, T_MOIS, 6.0, TAUX, "call")
+    assert prix == pytest.approx(np.exp(-TAUX * T_MOIS) * 6.0 * np.sqrt(T_MOIS / (2 * np.pi)))
+
+
+def test_kirk_matches_margrabe_at_zero_strike():
+    F1, F2, vol1, vol2, rho = 68.0, 64.0, 0.30, 0.32, 0.9
+    vol = np.sqrt(vol1 ** 2 - 2 * rho * vol1 * vol2 + vol2 ** 2)
+    d1 = (np.log(F1 / F2) + 0.5 * vol ** 2 * T_MOIS) / (vol * np.sqrt(T_MOIS))
+    margrabe = np.exp(-TAUX * T_MOIS) * (F1 * norm.cdf(d1) - F2 * norm.cdf(d1 - vol * np.sqrt(T_MOIS)))
+    assert bws.prix_kirk(F1, F2, 0.0, T_MOIS, vol1, vol2, rho, TAUX, "call") == pytest.approx(margrabe)
+
+
+@pytest.mark.parametrize("K", [3.0, 5.0])
+@pytest.mark.parametrize("type_option", ["call", "put"])
+def test_kirk_agrees_with_monte_carlo(K, type_option):
+    # deux futures lognormaux corrélés, 500 000 tirages antithétiques
+    F1, F2, vol1, vol2, rho = 68.0, 64.0, 0.30, 0.32, 0.9
+    rng = np.random.default_rng(11)
+    z1 = rng.standard_normal(500_000)
+    z2 = rho * z1 + np.sqrt(1 - rho ** 2) * rng.standard_normal(500_000)
+    gains = []
+    for signe in (1, -1):
+        f1 = F1 * np.exp(-0.5 * vol1 ** 2 * T_MOIS + vol1 * np.sqrt(T_MOIS) * signe * z1)
+        f2 = F2 * np.exp(-0.5 * vol2 ** 2 * T_MOIS + vol2 * np.sqrt(T_MOIS) * signe * z2)
+        ecart = f1 - f2 - K if type_option == "call" else K - (f1 - f2)
+        gains.append(np.maximum(ecart, 0.0))
+    valeurs = np.exp(-TAUX * T_MOIS) * (gains[0] + gains[1]) / 2
+    erreur_type = valeurs.std(ddof=1) / np.sqrt(len(valeurs))
+    kirk = bws.prix_kirk(F1, F2, K, T_MOIS, vol1, vol2, rho, TAUX, type_option)
+    assert abs(kirk - valeurs.mean()) < 4 * erreur_type
+
+
+def test_bear_put_spread_payoff_and_break_even():
+    # put 6,50 acheté 1,00 et put 5,00 vendu 0,40 : coût net 0,60
+    jambes = [(1, "put", 6.50, 1.00), (-1, "put", 5.00, 0.40)]
+    assert bws.points_morts(jambes, GRILLE_SPREAD) == pytest.approx([5.90])
+    # gain maximal sous 5,00, perte maximale au-dessus de 6,50
+    assert bws.pnl_expiration(jambes, np.array([4.0, 5.90, 7.0])) == pytest.approx([0.90, 0.0, -0.60])
+
+
+def test_long_strangle_break_evens():
+    # put 5,00 à 0,30 et call 8,50 à 0,25 : coût 0,55, perdu entre les deux strikes
+    jambes = [(1, "put", 5.00, 0.30), (1, "call", 8.50, 0.25)]
+    assert bws.points_morts(jambes, GRILLE_SPREAD) == pytest.approx([4.45, 9.05])
+    assert bws.pnl_expiration(jambes, np.array([6.0, 8.0])) == pytest.approx([-0.55, -0.55])
 
 
 # ============================================================================

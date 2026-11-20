@@ -149,7 +149,7 @@ Outputs:
 * `figures/`: charts
 * [`results.md`](results.md): all tables at full precision
 
-Tests (OU calibration on simulated data, entry and exit rules of the z-score strategy, backtest accounting, transaction costs and execution lag, alignment of the two price series):
+Tests cover the OU calibration on simulated data, the z-score entry and exit rules, the backtest accounting (costs, execution lag, drawdown), the option prices (put-call parity, Margrabe, Monte Carlo check of Kirk), the strategy break-evens and the alignment of the two price series:
 
 ```bash
 pip install -r requirements-dev.txt
