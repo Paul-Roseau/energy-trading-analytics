@@ -1,0 +1,22 @@
+{
+  "_comment": "Example case. Prices in USD per metric tonne.",
+  "cargo": {
+    "mass_mt": 60000,
+    "density_kg_per_l": 0.845,
+    "purchase_price": 698.0,
+    "hedge_entry_price": 698.0
+  },
+  "tank": {
+    "capacity_m3": 75000,
+    "rate_per_m3_month": 4.50,
+    "charge_full_capacity": false,
+    "extension_premium_per_m3": 1.00
+  },
+  "market": {
+    "curve": [700.00, 706.50, 711.00],
+    "sale_differential": -1.25,
+    "financing_rate": 0.05,
+    "insurance_rate_month": 0.00015,
+    "hedge_cost_per_mt": 0.10
+  }
+}
