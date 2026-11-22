@@ -69,6 +69,8 @@ For a storage horizon of n months:
 | **Net P&L** | **-75,000** | **-191,309** | **-421,617** |
 | Per tonne | -1.25 | -3.19 | -7.03 |
 
+![From selling now to storing one month](figures/waterfall.png)
+
 ### Break-Evens
 
 | Break-even | Needed | Available |
@@ -77,6 +79,8 @@ For a storage horizon of n months:
 | M3 - M1 contango to store two months | 16.78 USD/t | 11.00 USD/t |
 | Financing rate for one month of storage | 1.67% | 5.00% |
 | M2 - M3 spread to justify the extension option | 9.52 USD/t | 4.50 USD/t |
+
+![Decision map](figures/decision_map.png)
 
 ### Sensitivity
 

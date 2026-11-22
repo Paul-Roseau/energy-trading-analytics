@@ -2,6 +2,10 @@ import os
 import json
 import argparse
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 
 
 # ============================================================================
@@ -12,8 +16,35 @@ import numpy as np
 # ou stocker 1 ou 2 mois et vendre contre un contrat plus lointain ?
 
 DOSSIER = os.path.dirname(os.path.abspath(__file__))
+FIG_DIR = os.path.join(DOSSIER, "figures")
 CAS_PAR_DEFAUT = os.path.join(DOSSIER, "example_case.json")
 JOURS_PAR_MOIS = 30
+
+# Couleurs des graphiques
+FOND = "#fcfcfb"
+ENCRE = "#0b0b0b"
+ENCRE_2 = "#52514e"
+GRIS = "#898781"
+GRIS_CLAIR = "#b9b8b2"
+AXE = "#c3c2b7"
+GRILLE = "#e1e0d9"
+BLEU = "#2a78d6"
+ROUGE = "#e34948"
+DIVERGENT = LinearSegmentedColormap.from_list(
+    "rouge_bleu", ["#b3302f", "#ec9190", "#f0efec", "#6da7ec", "#184f95"])
+
+plt.rcParams.update({
+    "figure.facecolor": FOND, "axes.facecolor": FOND, "savefig.facecolor": FOND,
+    "font.size": 10, "text.color": ENCRE,
+    "axes.edgecolor": AXE, "axes.linewidth": 0.8, "axes.labelcolor": ENCRE_2,
+    "axes.titlesize": 11, "axes.titleweight": "bold", "axes.titlelocation": "left",
+    "axes.titlepad": 10, "axes.spines.top": False, "axes.spines.right": False,
+    "axes.grid": True, "axes.grid.axis": "y", "grid.color": GRILLE, "grid.linewidth": 0.6,
+    "xtick.color": AXE, "ytick.color": AXE, "xtick.labelcolor": ENCRE_2,
+    "ytick.labelcolor": ENCRE_2, "xtick.labelsize": 9, "ytick.labelsize": 9,
+    "savefig.dpi": 160,
+})
+
 
 # ============================================================================
 # CALCULS
@@ -89,6 +120,92 @@ def spread_option_extension(cargaison, cuve, marche):
 
 
 # ============================================================================
+# GRAPHIQUES
+# ============================================================================
+
+def graphique_cascade(cargaison, marche, vente, stock):
+    """Passage du P&L 'vendre maintenant' au P&L 'stocker 1 mois'"""
+    etapes = [("Sell now", vente["net_pnl"], True),
+              ("Contango\ncaptured", (marche["curve"][1] - marche["curve"][0]) * cargaison["mass_mt"], False),
+              ("Storage", -stock["storage_cost"], False),
+              ("Financing", -stock["financing_cost"], False),
+              ("Insurance", -stock["insurance_cost"], False),
+              ("Futures\nroll", -stock["roll_cost"], False),
+              ("Store\n1 month", stock["net_pnl"], True)]
+    fig, ax = plt.subplots(figsize=(9.5, 4.6))
+    niveau = 0.0
+    niveaux = []
+    for i, (nom, valeur, total) in enumerate(etapes):
+        k = valeur / 1000
+        if total:
+            bas, hauteur, couleur = 0.0, k, GRIS_CLAIR
+            niveau = k
+        else:
+            bas, hauteur = niveau, k
+            couleur = BLEU if k >= 0 else ROUGE
+            niveau += k
+        niveaux.append(niveau)
+        ax.bar(i, hauteur, bottom=bas, width=0.55, color=couleur, edgecolor=FOND, lw=2)
+        if k >= 0:
+            y, va, decalage = bas + hauteur, "bottom", 3
+        else:
+            y, va, decalage = bas + hauteur, "top", -3
+        texte = f"{k:,.0f}" if total else f"{k:+,.0f}"
+        ax.annotate(texte, (i, y), xytext=(0, decalage), textcoords="offset points",
+                    ha="center", va=va, fontsize=9, color=ENCRE_2)
+    ax.axhline(0, color=AXE, lw=0.8)
+    ax.set_xticks(range(len(etapes)), [e[0] for e in etapes])
+    ax.tick_params(axis="x", length=0)
+    ax.set_title("Storing one month versus selling now, thousand USD")
+    bas_axe = min(0.0, min(niveaux))
+    haut_axe = max(0.0, max(niveaux))
+    marge = 0.15 * (haut_axe - bas_axe)
+    ax.set_ylim(bas_axe - marge, haut_axe + marge)
+    ax.annotate("Example case: blue adds to P&L, red subtracts; grey bars are totals.",
+                (0, 0), xycoords="axes fraction", xytext=(0, -30), textcoords="offset points",
+                fontsize=8, color=GRIS, va="top")
+    fig.savefig(os.path.join(FIG_DIR, "waterfall.png"), bbox_inches="tight", pad_inches=0.2)
+    plt.close(fig)
+
+
+def graphique_decision(cargaison, cuve, marche):
+    """Gain à stocker 1 mois plutôt que vendre, selon le contango et le taux de financement"""
+    contangos = np.linspace(0, 16, 161)
+    taux = np.linspace(0, 0.08, 81)
+    gains = np.empty((len(taux), len(contangos)))
+    for i, t in enumerate(taux):
+        for j, c in enumerate(contangos):
+            courbe = [marche["curve"][0], marche["curve"][0] + c] + list(marche["curve"][2:])
+            m = dict(marche, financing_rate=t, curve=courbe)
+            gains[i, j] = (evaluer(cargaison, cuve, m, 1)["net_pnl"]
+                           - evaluer(cargaison, cuve, m, 0)["net_pnl"]) / 1000
+    limite = np.abs(gains).max()
+    fig, ax = plt.subplots(figsize=(9.5, 4.8))
+    carte = ax.pcolormesh(contangos, taux * 100, gains, cmap=DIVERGENT, vmin=-limite, vmax=limite,
+                          shading="auto")
+    ax.contour(contangos, taux * 100, gains, levels=[0], colors=[ENCRE], linewidths=1.2)
+    ax.grid(False)
+    contango_exemple = marche["curve"][1] - marche["curve"][0]
+    ax.scatter([contango_exemple], [marche["financing_rate"] * 100], s=60, color=ENCRE,
+               edgecolor=FOND, linewidth=2, zorder=3)
+    ax.annotate("example case", (contango_exemple, marche["financing_rate"] * 100), xytext=(8, 6),
+                textcoords="offset points", fontsize=9, color=ENCRE)
+    ax.text(0.97, 0.08, "store", transform=ax.transAxes, ha="right", fontsize=11, color=ENCRE)
+    ax.text(0.03, 0.90, "sell now", transform=ax.transAxes, ha="left", fontsize=11, color=ENCRE)
+    ax.set_xlabel("M2 - M1 contango, USD/t")
+    ax.set_ylabel("Financing rate, % a year")
+    ax.set_title("Gain from storing one month instead of selling now, thousand USD "
+                 "(black line: break-even)")
+    barre = fig.colorbar(carte, ax=ax, pad=0.02)
+    barre.outline.set_visible(False)
+    barre.ax.tick_params(color=AXE, labelcolor=ENCRE_2, labelsize=9)
+    ax.spines["left"].set_visible(False)
+    ax.spines["bottom"].set_visible(False)
+    fig.savefig(os.path.join(FIG_DIR, "decision_map.png"), bbox_inches="tight", pad_inches=0.2)
+    plt.close(fig)
+
+
+# ============================================================================
 # EXPORT
 # ============================================================================
 
@@ -108,6 +225,7 @@ def main():
     parser = argparse.ArgumentParser(description="Sell now or store a hedged cargo?")
     parser.add_argument("--config", default=CAS_PAR_DEFAUT, help="fichier JSON du cas")
     args = parser.parse_args()
+    os.makedirs(FIG_DIR, exist_ok=True)
     cargaison, cuve, marche = charger_cas(args.config)
 
     horizons = range(len(marche["curve"]))
@@ -164,9 +282,12 @@ def main():
         lignes.append([nom] + [f"{v:,.0f}" for v in nets] + [noms[int(np.argmax(nets))]])
     res += tableau(["Scenario"] + noms + ["Best"], lignes)
 
+    graphique_cascade(cargaison, marche, resultats[0], resultats[1])
+    graphique_decision(cargaison, cuve, marche)
+
     with open(os.path.join(DOSSIER, "results.md"), "w", encoding="utf-8") as fichier:
         fichier.write(res)
-    print("Résultats écrits dans results.md")
+    print("Résultats écrits dans results.md, graphiques dans figures/")
 
 
 if __name__ == "__main__":
