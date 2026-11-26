@@ -1,4 +1,6 @@
 """Tests de l'étude du spread Brent-WTI : calibration OU, signal z-score, backtest, options et données"""
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -63,6 +65,14 @@ def test_ou_moments_converge_to_stationary_distribution():
     moyenne, ecart = bws.moments_ou(ou, x0=7.0, horizon=1_000.0)
     assert moyenne == pytest.approx(4.0)
     assert ecart == pytest.approx(0.5 / np.sqrt(2 * 0.1))
+
+
+@pytest.mark.parametrize("serie", [1.02 ** np.arange(200), (-1.0) ** np.arange(200)],
+                         ids=["explosive", "alternating"])
+def test_ou_calibration_rejects_series_without_mean_reversion(serie):
+    # pente AR(1) de 1,02 ou de -1 : aucune demi-vie n'a de sens
+    with pytest.raises(ValueError, match="retour à la moyenne"):
+        bws.calibrer_ou(serie)
 
 
 # ============================================================================
@@ -147,6 +157,15 @@ def test_max_drawdown_is_measured_from_the_running_peak():
     assert resume["max_drawdown_usd"] == pytest.approx(pire)
 
 
+def test_sharpe_is_nan_without_trades():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")          # aucune division par zéro
+        jours, trades, resume = bws.backtest(spread_synthetique(), fenetre=60, seuil_entree=50.0)
+    assert trades == [] and (jours["position"] == 0).all()
+    assert np.isnan(resume["sharpe"])
+    assert resume["annual_pnl_usd"] == 0.0
+
+
 # ============================================================================
 # OPTIONS SUR LE SPREAD
 # ============================================================================
@@ -204,6 +223,38 @@ def test_long_strangle_break_evens():
     jambes = [(1, "put", 5.00, 0.30), (1, "call", 8.50, 0.25)]
     assert bws.points_morts(jambes, GRILLE_SPREAD) == pytest.approx([4.45, 9.05])
     assert bws.pnl_expiration(jambes, np.array([6.0, 8.0])) == pytest.approx([-0.55, -0.55])
+
+
+@pytest.mark.parametrize("T, vol", [(0.0, 6.0), (T_MOIS, 0.0)], ids=["expiry", "zero-vol"])
+def test_bachelier_returns_intrinsic_value_without_time_or_volatility(T, vol):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert bws.prix_bachelier(6.0, 5.0, T, vol, TAUX, "call") == pytest.approx(np.exp(-TAUX * T))
+        assert bws.prix_bachelier(6.0, 5.0, T, vol, TAUX, "put") == 0.0
+        assert bws.prix_bachelier(5.0, 5.0, T, vol, TAUX, "call") == 0.0     # à la monnaie
+
+
+def test_kirk_returns_intrinsic_value_at_expiry():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert bws.prix_kirk(68.0, 64.0, 3.0, 0.0, 0.30, 0.32, 0.9, TAUX, "call") == pytest.approx(1.0)
+        assert bws.prix_kirk(68.0, 64.0, 3.0, 0.0, 0.30, 0.32, 0.9, TAUX, "put") == 0.0
+        assert bws.prix_kirk(68.0, 64.0, 4.0, 0.0, 0.30, 0.32, 0.9, TAUX, "call") == 0.0
+
+
+def test_kirk_requires_positive_f2_plus_k():
+    with pytest.raises(ValueError, match=r"F2 \+ K > 0"):
+        bws.prix_kirk(68.0, 64.0, -64.0, T_MOIS, 0.30, 0.32, 0.9, TAUX, "call")
+
+
+@pytest.mark.parametrize("pricer, arguments", [
+    (bws.prix_bachelier, (5.0, 4.0, T_MOIS, 6.0, TAUX)),
+    (bws.prix_kirk, (68.0, 64.0, 3.0, T_MOIS, 0.30, 0.32, 0.9, TAUX)),
+], ids=["bachelier", "kirk"])
+def test_unknown_option_type_is_rejected(pricer, arguments):
+    # une faute de frappe (« Call ») ne doit pas donner silencieusement le prix du put
+    with pytest.raises(ValueError, match="'call' ou 'put'"):
+        pricer(*arguments, "Call")
 
 
 # ============================================================================

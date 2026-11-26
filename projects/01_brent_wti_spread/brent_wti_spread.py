@@ -125,6 +125,8 @@ def calibrer_ou(x, dt=1.0):
     """Calibration OU par la discrétisation exacte AR(1) : x[t+1] = a + b x[t] + e"""
     x = np.asarray(x, dtype=float)
     b, a = np.polyfit(x[:-1], x[1:], 1)
+    if not 0 < b < 1:                       # sinon kappa négatif ou indéfini
+        raise ValueError(f"pente AR(1) de {b:.4f} hors de ]0, 1[ : pas de retour à la moyenne")
     residus = x[1:] - (a + b * x[:-1])
     kappa = -np.log(b) / dt                 # et pas 1 - b (approximation)
     theta = a / (1 - b)
@@ -192,8 +194,9 @@ def backtest(spread, fenetre=FENETRE, seuil_entree=SEUIL_ENTREE, seuil_sortie=SE
     pnl_periode = pnl.loc[debut:]
     annees = len(pnl_periode) / 252
 
+    vol_pnl = pnl_periode.std()             # nulle sans aucun trade
     resume = {
-        "sharpe": pnl_periode.mean() / pnl_periode.std() * np.sqrt(252),
+        "sharpe": pnl_periode.mean() / vol_pnl * np.sqrt(252) if vol_pnl > 0 else np.nan,
         "annual_pnl_usd": pnl_periode.sum() / annees,
         "max_drawdown_usd": drawdown.min(),
         "n_trades": len(trades),
@@ -236,11 +239,24 @@ def liste_trades(spread, position, pnl_brut, cout, taille):
 # OPTIONS SUR LE SPREAD
 # ============================================================================
 
+def verifier_type_option(type_option):
+    if type_option not in ("call", "put"):
+        raise ValueError(f"type_option doit valoir 'call' ou 'put', pas {type_option!r}")
+
+
+def valeur_intrinseque(ecart, type_option, actu):
+    """Valeur actualisée à l'échéance, ecart = sous-jacent - strike"""
+    return actu * np.maximum(ecart if type_option == "call" else -ecart, 0.0)
+
+
 def prix_bachelier(F, K, T, vol, r, type_option):
     """Modèle normal (Bachelier) : le spread peut être négatif, vol en USD/bbl"""
+    verifier_type_option(type_option)
     s = vol * np.sqrt(T)
-    d = (F - K) / s
     actu = np.exp(-r * T)
+    if s == 0:                              # échéance atteinte ou vol nulle
+        return valeur_intrinseque(F - K, type_option, actu)
+    d = (F - K) / s
     if type_option == "call":
         return actu * ((F - K) * norm.cdf(d) + s * norm.pdf(d))
     return actu * ((K - F) * norm.cdf(-d) + s * norm.pdf(d))
@@ -248,11 +264,16 @@ def prix_bachelier(F, K, T, vol, r, type_option):
 
 def prix_kirk(F1, F2, K, T, vol1, vol2, rho, r, type_option):
     """Approximation de Kirk (1995) pour une option sur F1 - F2"""
+    verifier_type_option(type_option)
+    if F2 + K <= 0:
+        raise ValueError("l'approximation de Kirk suppose F2 + K > 0")
     w = F2 / (F2 + K)
     vol = np.sqrt(vol1 ** 2 - 2 * rho * vol1 * vol2 * w + (vol2 * w) ** 2)
+    actu = np.exp(-r * T)
+    if vol * np.sqrt(T) == 0:               # échéance atteinte ou vol nulle
+        return valeur_intrinseque(F1 - F2 - K, type_option, actu)
     d1 = (np.log(F1 / (F2 + K)) + 0.5 * vol ** 2 * T) / (vol * np.sqrt(T))
     d2 = d1 - vol * np.sqrt(T)
-    actu = np.exp(-r * T)
     call = actu * (F1 * norm.cdf(d1) - (F2 + K) * norm.cdf(d2))
     if type_option == "call":
         return call
